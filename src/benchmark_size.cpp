@@ -79,3 +79,316 @@ BENCHMARK_F(PRNG_Fixture, ScaleBenchmarkV2)
     benchmark::DoNotOptimize(output);
   }
 }
+
+#if defined(_MSC_VER)
+#pragma warning(push)
+// prevents C4146: unary minus operator applied to unsigned
+// type, result still unsigned
+#pragma warning(disable : 4146)
+#endif
+
+template<typename T>
+size_t uint_size_linsearch(const T& val) noexcept
+{
+  T dig10 = 10;
+  for (size_t i = 1;
+       i != std::numeric_limits<T>::digits10 + 1;
+       ++i) {
+    if (val < dig10) {
+      return i;
+    }
+    dig10 *= 10;
+  }
+  return std::numeric_limits<T>::digits10 + 1;
+}
+
+BENCHMARK_F(PRNG_Fixture, Lin)(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_linsearch(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+BENCHMARK_F(ExpPRNG_Fixture, Lin)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_linsearch(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+// Binary search to find the number of digits in the given
+// integral.
+template<typename T>
+size_t uint_size_binsearch(const T& val) noexcept
+{
+  size_t low = 0;
+  size_t high = std::numeric_limits<T>::digits10 + 1;
+  while (low + 1 < high) {
+    size_t mid = (low + high) / 2;
+    T mid_value =
+      powers_of_10<T>[mid]; // 10^Mid (Mid+1 digits)
+    if (val < mid_value) {
+      // Mid digits is sufficient
+      high = mid;
+    } else {
+      // Mid digits is insufficient
+      low = mid;
+    }
+  }
+  return high;
+}
+
+BENCHMARK_F(PRNG_Fixture, BinV1)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_binsearch(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+BENCHMARK_F(ExpPRNG_Fixture, BinV1)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_binsearch(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+template<typename T>
+constexpr T pow10(size_t exp) noexcept
+{
+  T ret = 1;
+  while (exp-- > 0) {
+    ret *= 10;
+  }
+  return ret;
+}
+
+// Binary search to find the number of digits in the given
+// integral. Low: Something that is guaranteed to be too
+// small High: Something that is guaranteed to be large
+// enough Expects: Low < High Returns: the smallest value
+// that is large enough (will be between Low+1 and High
+// inclusive) Note: 0 is always too small, because the
+// number 0 has size 1.
+template<typename T,
+         size_t Low = 0,
+         size_t High = std::numeric_limits<T>::digits10 + 1>
+size_t uint_size_binsearch_constexpr(const T& val) noexcept
+{
+  static_assert(Low < High, "Low must be less than High");
+  static_assert(std::is_unsigned_v<T> &&
+                  std::is_integral_v<T>,
+                "T should be an unsigned integer");
+  if constexpr (Low + 1 == High) {
+    return High;
+  } else {
+    using Mid =
+      std::integral_constant<size_t, (Low + High) / 2>;
+    using MidValue = std::integral_constant<
+      T,
+      pow10<T>(Mid::value)>; // 10^Mid (Mid+1 digits)
+    if (val < MidValue::value) {
+      // Mid digits is sufficient
+      return uint_size_binsearch_constexpr<T,
+                                           Low,
+                                           Mid::value>(val);
+    } else {
+      // Mid digits is insufficient
+      return uint_size_binsearch_constexpr<T,
+                                           Mid::value,
+                                           High>(val);
+    }
+  }
+}
+
+BENCHMARK_F(PRNG_Fixture, BinV2)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_binsearch_constexpr(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+BENCHMARK_F(ExpPRNG_Fixture, BinV2)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_binsearch_constexpr(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+template<typename T>
+size_t uint_size_approx_and_refine(const T& val) noexcept
+{
+#if !defined(_MSC_VER)
+  unsigned int approx_log2 =
+    (sizeof(unsigned int) * 8) - __builtin_clz(val | 1);
+#else
+  unsigned int approx_log2 =
+    (sizeof(unsigned int) * 8) - __lzcnt(val);
+#endif
+  unsigned int approx_log10 = (approx_log2 * 19728) >> 16;
+  return approx_log10 +
+         (val >= powers_of_10<T>[approx_log10]);
+}
+
+BENCHMARK_F(PRNG_Fixture, ApproxV1)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_approx_and_refine(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+BENCHMARK_F(ExpPRNG_Fixture, ApproxV1)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_approx_and_refine(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+template<typename T>
+struct P10Entry
+{
+  unsigned num_digits;
+  T next_pow_of_10_minus_1;
+};
+
+template<typename T>
+constexpr std::array<P10Entry<T>,
+                     std::numeric_limits<T>::digits>
+  powers_of_2 = []() {
+    std::array<P10Entry<T>, std::numeric_limits<T>::digits>
+      powers{};
+    constexpr T maxvalue = std::numeric_limits<T>::max();
+    for (size_t i = 0; i < powers.size(); ++i) {
+      T lowest = 1 << i;
+      T num_digits = 1;
+      T next_pow_of_10 = 10;
+      while (true) {
+        if (lowest < next_pow_of_10) {
+          --next_pow_of_10;
+          break;
+        }
+        ++num_digits;
+        if (maxvalue / 10 < next_pow_of_10) {
+          next_pow_of_10 = maxvalue;
+          break;
+        }
+        next_pow_of_10 *= 10;
+      }
+      powers[i] = { num_digits, next_pow_of_10 };
+    }
+    return powers;
+  }();
+
+template<typename T>
+size_t uint_size_approx_and_refine_base2(
+  const T& val) noexcept
+{
+#if !defined(_MSC_VER)
+  size_t approx_log2 = (sizeof(unsigned long) * 8 - 1) -
+                       __builtin_clzl(val | 1);
+#else
+  size_t approx_log2 =
+    (sizeof(unsigned int) * 8 - 1) - __lzcnt(val);
+#endif
+  const P10Entry<T>& entry = powers_of_2<T>[approx_log2];
+  return entry.num_digits +
+         (val > entry.next_pow_of_10_minus_1);
+}
+
+BENCHMARK_F(PRNG_Fixture, ApproxV2)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_approx_and_refine_base2(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+BENCHMARK_F(ExpPRNG_Fixture, ApproxV2)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_approx_and_refine_base2(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+template<typename T>
+constexpr std::array<
+  P10Entry<T>,
+  ((std::numeric_limits<T>::digits - 1) >> 3) + 1>
+  powers_of_8 = []() {
+    std::array<P10Entry<T>,
+               ((std::numeric_limits<T>::digits - 1) >> 3) +
+                 1>
+      powers{};
+    constexpr T maxvalue = std::numeric_limits<T>::max();
+    for (size_t i = 0; i < powers.size(); ++i) {
+      T lowest = 1 << (i << 3);
+      T num_digits = 1;
+      T next_pow_of_10 = 10;
+      while (true) {
+        if (lowest < next_pow_of_10) {
+          --next_pow_of_10;
+          break;
+        }
+        ++num_digits;
+        if (maxvalue / 10 < next_pow_of_10) {
+          next_pow_of_10 = maxvalue;
+          break;
+        }
+        next_pow_of_10 *= 10;
+      }
+      powers[i] = { num_digits, next_pow_of_10 };
+    }
+    return powers;
+  }();
+
+template<typename T>
+size_t uint_size_approx_and_refine_base8(
+  const T& val) noexcept
+{
+#if !defined(_MSC_VER)
+  size_t approx_log2 = (sizeof(unsigned long) * 8 - 1) -
+                       __builtin_clzl(val | 1);
+#else
+  size_t approx_log2 =
+    (sizeof(unsigned int) * 8 - 1) - __lzcnt(val);
+#endif
+  const P10Entry<T>& entry =
+    powers_of_8<T>[approx_log2 >> 3];
+  return entry.num_digits +
+         (val > entry.next_pow_of_10_minus_1);
+}
+
+BENCHMARK_F(PRNG_Fixture, ApproxV3)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_approx_and_refine_base8(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+BENCHMARK_F(ExpPRNG_Fixture, ApproxV3)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = uint_size_approx_and_refine_base8(prng());
+    benchmark::DoNotOptimize(output);
+  }
+}
