@@ -61,3 +61,12 @@ public:
 };
 
 } // namespace
+
+BENCHMARK_F(PRNG_Fixture, ScaleBenchmark)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = prng() * 3.57738848293f;
+    benchmark::DoNotOptimize(output);
+  }
+}
