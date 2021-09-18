@@ -62,11 +62,20 @@ public:
 
 } // namespace
 
-BENCHMARK_F(PRNG_Fixture, ScaleBenchmark)
+BENCHMARK_F(PRNG_Fixture, ScaleBenchmarkV1)
 (benchmark::State& state)
 {
   for (auto _ : state) {
     output = prng() * 3.57738848293f;
+    benchmark::DoNotOptimize(output);
+  }
+}
+
+BENCHMARK_F(PRNG_Fixture, ScaleBenchmarkV2)
+(benchmark::State& state)
+{
+  for (auto _ : state) {
+    output = static_cast<uint64_t>(prng()) * 234448 >> 16;
     benchmark::DoNotOptimize(output);
   }
 }
