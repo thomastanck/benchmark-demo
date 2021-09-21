@@ -47,6 +47,27 @@ public:
   void TearDown(const ::benchmark::State&) {}
 };
 
+class PRNG2_Fixture : public benchmark::Fixture
+{
+public:
+  inline static PRNG<uint32_t> prng1{ [](uint32_t& x) {
+    x = ((x >> 16) ^ x) * 0x45d9f3b;
+    return powers_of_10<uint32_t>[8] & x;
+  } };
+  inline static PRNG<uint32_t> prng2{ [](uint32_t& x) {
+    x = ((x >> 16) ^ x) * 0x45d9f3b;
+    return powers_of_10<uint32_t>[8] & x;
+  } };
+  inline static size_t output;
+
+  void SetUp(const ::benchmark::State&)
+  {
+    prng1.reset(42);
+    prng2.reset(42);
+  }
+  void TearDown(const ::benchmark::State&) {}
+};
+
 class ExpPRNG_Fixture : public benchmark::Fixture
 {
 public:
@@ -77,6 +98,124 @@ BENCHMARK_F(PRNG_Fixture, ScaleBenchmarkV2)
   for (auto _ : state) {
     output = static_cast<uint64_t>(prng()) * 234448 >> 16;
     benchmark::DoNotOptimize(output);
+  }
+}
+
+BENCHMARK_F(PRNG_Fixture, CacheBenchmark)
+(benchmark::State& state)
+{
+  std::vector<int> count;
+  count.resize(1000000000);
+  int i = 0;
+  for (auto _ : state) {
+    i++;
+    i = i % 1000000000;
+    count[i] += prng();
+    benchmark::DoNotOptimize(count[i]);
+  }
+}
+
+BENCHMARK_F(PRNG_Fixture, PrefetchBenchmark)
+(benchmark::State& state)
+{
+  std::vector<int> count;
+  count.resize(1000000000);
+  int i = 0;
+  for (auto _ : state) {
+    i += 33;
+    i = i % 1000000000;
+    count[i] += prng();
+    benchmark::DoNotOptimize(count[i]);
+  }
+}
+
+BENCHMARK_F(PRNG_Fixture, PrefetchBenchmarkRandom)
+(benchmark::State& state)
+{
+  std::vector<int> count;
+  count.resize(1000000000);
+  for (auto _ : state) {
+    auto random = prng();
+    int i = random % 1000000000;
+    count[i] += random;
+    benchmark::DoNotOptimize(count[i]);
+  }
+}
+
+BENCHMARK_F(PRNG2_Fixture, EasyBranchBenchmark)
+(benchmark::State& state)
+{
+  int i;
+  for (auto _ : state) {
+    auto random = prng1();
+    if (random < 100) {
+      i += prng1();
+    } else {
+      i += prng2();
+    }
+    benchmark::DoNotOptimize(i);
+  }
+}
+
+BENCHMARK_F(PRNG2_Fixture, RandomBranchBenchmark)
+(benchmark::State& state)
+{
+  int i;
+  for (auto _ : state) {
+    auto random = prng1();
+    if (random % 2 == 0) {
+      i += prng1();
+    } else {
+      i += prng2();
+    }
+    benchmark::DoNotOptimize(i);
+  }
+}
+
+BENCHMARK_F(PRNG2_Fixture, SmartPredictableBenchmark)
+(benchmark::State& state)
+{
+  int i;
+  for (auto _ : state) {
+    auto random1 = prng1();
+    auto random2 = prng2();
+    // By design, we know random1 == random2, but the
+    // optimizer doesn't know.
+    auto ten = prng1() - prng2() + 10;
+    auto five = (random1 - random2 + 5) % ten;
+    // We will loop five times twice
+    for (int j = 0; j < five; j++) {
+      i += prng1() + prng2();
+      benchmark::DoNotOptimize(i);
+    }
+    for (int j = five; j < ten; j++) {
+      i -= prng1() + prng2();
+      benchmark::DoNotOptimize(i);
+    }
+  }
+}
+
+BENCHMARK_F(PRNG2_Fixture, SmartUnpredictableBenchmark)
+(benchmark::State& state)
+{
+  int i;
+  for (auto _ : state) {
+    auto random1 = prng1();
+    auto random2 = prng2();
+    // By design, we know random1 == random2, but the
+    // optimizer doesn't know.
+    auto ten = prng1() - prng2() + 10;
+    auto random3 = (random1 + random2 + 5) % ten;
+    benchmark::DoNotOptimize(random3);
+    // We will loop a total of 10 times
+    for (int j = 0; j < random3; j++) {
+      i += prng1() + prng2();
+      benchmark::DoNotOptimize(i);
+    }
+    for (int j = random3; j < ten; j++) {
+      i -= prng1() + prng2();
+      benchmark::DoNotOptimize(i);
+    }
   }
 }
 
